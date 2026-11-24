@@ -1,0 +1,36 @@
+server:
+  port: 8888
+spring:
+  application:
+    name: agent
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://172.16.230.128:3306/cloud-programmer?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: 123456
+  ai:
+    deepseek:
+      api-key: sk-17e3c5b1ae1d4c9b882b27f9068663ee
+      base-url: https://api.deepseek.com
+      chat:
+        enabled: true
+        model: deepseek-r1
+        temperature: 0.7
+        max-tokens: 2000
+        top-p: 0.9
+
+
+security:
+  jwt:
+    issuer: cloud-programmer
+    public-key-location: classpath:keys/public_key.pem
+
+    # 与 Admin 保持一致
+    authorities-claim: roles
+    authority-prefix: ROLE_
+    principal-claim-name: sub
+  internal:
+     token: bm-nRqxqPKY6ZnwDSensheOZq6NQmWdF1zRCTiQ3Z0o
+admin:
+  url: http://localhost:8000
+

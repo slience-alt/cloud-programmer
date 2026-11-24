@@ -1,0 +1,24 @@
+server:
+  port: 8000
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://172.16.230.128:3306/cloud-programmer?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: 123456
+
+
+
+security:
+  jwt:
+    issuer: cloud-programmer
+    public-key-location: classpath:keys/public_key.pem
+    private-key-location: classpath:keys/private_key.pem
+
+    # 按照实际签发的 JWT Claim 调整
+    authorities-claim: roles
+    authority-prefix: ROLE_
+    principal-claim-name: sub
+
+  internal:
+    token: bm-nRqxqPKY6ZnwDSensheOZq6NQmWdF1zRCTiQ3Z0o
