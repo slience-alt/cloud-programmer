@@ -64,16 +64,27 @@ public class AgentTask {
     }
     /**
      * 请求取消任务。
-     * 这里只设置取消标记，真正结束由执行线程处理。
+     *
+     * PENDING 状态下直接进入 CANCELLED；
+     * RUNNING 状态下只设置取消标记，由执行线程完成取消。
      */
     public synchronized boolean requestCancel() {
         if (isTerminal()) {
             return false;
         }
 
-        return context.cancel();
-    }
+        if (!context.cancel()) {
+            return false;
+        }
 
+        if ("PENDING".equals(status)) {
+            this.status = "CANCELLED";
+            this.error = "任务已取消";
+            this.finishedAt = Instant.now();
+        }
+
+        return true;
+    }
     /**
      * 将任务状态更新为 CANCELLED。
      */

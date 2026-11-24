@@ -2,6 +2,7 @@ package com.cloud.programmer.runtime.task;
 
 import com.cloud.programmer.enums.ResponseCodeEnum;
 import com.cloud.programmer.exception.BizException;
+import com.cloud.programmer.runtime.api.AgentTaskResponse;
 import com.cloud.programmer.runtime.entity.AgentRun;
 import com.cloud.programmer.runtime.entity.AgentRunEvent;
 import com.cloud.programmer.runtime.orchestrator.AgentOrchestrator;
@@ -165,11 +166,12 @@ public class AgentTaskService {
             return false;
         }
 
-        if ("PENDING".equals(task.getStatus())) {
+        if ("CANCELLED".equals(task.getStatus())) {
             cancelTaskSafely(task, "用户取消任务");
         }
 
         return true;
+
     }
     /**
      * 处理空会话 ID
@@ -181,38 +183,56 @@ public class AgentTaskService {
         return conversationId;
     }
 
+
+    /**
+     * 安全地完成任务取消。
+     *
+     * 1. 保证同一个任务只完成一次取消状态转换
+     * 2. 优先更新数据库
+     * 3. 数据库更新成功后，再更新内存状态
+     * 4. 最后发布终态事件并清理资源
+     */
     private void cancelTaskSafely(AgentTask task, String reason) {
         String taskId = task.getTaskId();
-
-        if (!task.cancel()) {
-            return;
+        synchronized (task) {
+            // 已经进入终态，不再重复取消
+            if (task.isTerminal()) {
+                return;
+            }
+            try {
+                // 先更新数据库，避免数据库失败时内存已经进入终态
+                agentRunService.markCancelled(taskId, reason);
+            } catch (Exception e) {
+                log.error("更新 Agent 取消状态失败，taskId={}", taskId, e);
+                // 数据库更新失败，不发送取消成功事件，也不清理资源
+                return;
+            }
+            // 数据库更新成功后，再转换内存状态
+            if (!task.cancel()) {
+                log.warn("Agent 任务取消状态转换失败，taskId={}", taskId);
+                return;
+            }
         }
-
-        try {
-            agentRunService.markCancelled(taskId, reason);
-        } catch (Exception e) {
-            log.error("更新 Agent 取消状态失败，taskId={}", taskId, e);
-        }
-
+        // 状态转换完成后，发布取消事件
         try {
             publishEvent(taskId, new AgentStreamEvent("cancelled", "任务已取消"));
-            cleanupTaskResources(taskId);
         } catch (Exception e) {
-            log.error(
-                    "发布 Agent 取消事件失败，taskId={}",
-                    taskId,
-                    e
-            );
+            log.error("发布 Agent 取消事件失败，taskId={}", taskId, e);
+        } finally {
+            cleanupTaskResources(taskId);
         }
     }
+
+
 
     /**
      * 执行非流式任务
      */
     private void executeTask(AgentTask task) {
         String taskId = task.getTaskId();
+
         try {
-            // 如果任务已经取消，或者状态不允许启动，直接退出
+            // 1. 尝试启动任务
             if (!task.start()) {
                 if (task.getContext().isCancelled()) {
                     cancelTaskSafely(task, "用户取消任务");
@@ -220,85 +240,132 @@ public class AgentTaskService {
                 return;
             }
 
-            // 数据库状态更新为 RUNNING
+            // 2. 数据库状态更新为 RUNNING
             agentRunService.markRunning(taskId);
 
+            // 3. 检查任务是否已经取消
             task.getContext().checkCancelled();
 
-            String result = agentOrchestrator.run(task.getInput(), task.getConversationId(), task.getAgentId(), task.getOwnerUserId(), taskId, task.getContext());
+            // 4. 执行 Agent
+            String result = agentOrchestrator.run(
+                    task.getInput(),
+                    task.getConversationId(),
+                    task.getAgentId(),
+                    task.getOwnerUserId(),
+                    taskId,
+                    task.getContext()
+            );
 
+            // 5. 执行结束后再次检查取消状态
             task.getContext().checkCancelled();
-
-            // 先完成内存状态转换，再更新数据库
-            if (task.complete(result)) {
-                agentRunService.markSuccess(taskId, result);
-            }
+            // 6. 更新成功状态
+            completeTaskSafely(task, result);
 
         } catch (Exception e) {
 
+            // 任务取消不应该被记录为执行失败
             if (task.getContext().isCancelled()) {
                 log.info("Agent 任务已取消，taskId={}", taskId);
                 cancelTaskSafely(task, "用户取消任务");
                 return;
             }
 
-
             log.error("Agent 非流式任务执行失败，taskId={}", taskId, e);
 
-            if (task.fail("Agent 执行失败，请检查服务日志")) {
-                markRunFailedSafely(taskId, "Agent 执行失败");
-            }
+            // 7. 更新失败状态
+            failTaskSafely(task, "Agent 执行失败，请检查服务日志", "Agent 执行失败");
         }
     }
+
+
 
     /**
      * 执行流式任务
      */
     private void executeStreamTask(AgentTask task) {
         String taskId = task.getTaskId();
+        String result;
         try {
+            // 1. 启动任务
             if (!task.start()) {
                 if (task.getContext().isCancelled()) {
                     cancelTaskSafely(task, "用户取消任务");
                 }
                 return;
             }
+            // 2. 更新数据库运行状态
             agentRunService.markRunning(taskId);
             task.getContext().checkCancelled();
-            String result = agentOrchestrator.runStream(task.getInput(), event -> publishEvent(taskId, event), task.getConversationId(), task.getAgentId(), task.getOwnerUserId(), taskId, task.getContext());
+            // 3. 执行流式 Agent
+            result = agentOrchestrator.runStream(
+                    task.getInput(),
+                    event -> publishEvent(taskId, event),
+                    task.getConversationId(),
+                    task.getAgentId(),
+                    task.getOwnerUserId(),
+                    taskId,
+                    task.getContext()
+            );
+
             task.getContext().checkCancelled();
-            if (task.complete(result)) {
-                agentRunService.markSuccess(taskId, result);
-
-                // done 事件发布前会自动刷新剩余 Token
-                publishEvent(taskId, new AgentStreamEvent("done", result));
-
-                // 终态事件持久化成功后清理资源
-                cleanupTaskResources(taskId);
-            }
         } catch (Exception e) {
+
             if (task.getContext().isCancelled()) {
-                log.info("Agent 任务已取消，taskId={}", taskId);
+                log.info("Agent 流式任务已取消，taskId={}", taskId);
                 cancelTaskSafely(task, "用户取消任务");
                 return;
             }
-
-
             log.error("Agent 流式任务执行失败，taskId={}", taskId, e);
-
-            if (task.fail("Agent 执行失败")) {
-                markRunFailedSafely(taskId, "Agent 执行失败");
-                try {
-                    publishEvent(taskId, new AgentStreamEvent("error", "Agent 执行失败，请稍后重试"));
-                    cleanupTaskResources(taskId);
-                } catch (Exception publishException) {
-                    log.error(
-                            "发布 Agent 失败事件时发生异常，taskId={}",
-                            taskId,
-                            publishException
-                    );
-                }
+            // 4. 先更新数据库和内存失败状态
+            boolean failed = failTaskSafely(
+                    task,
+                    "Agent 执行失败",
+                    "Agent 执行失败"
+            );
+            if (!failed) {
+                return;
             }
+            // 5. 持久化并发送失败事件
+            try {
+                publishEvent(taskId, new AgentStreamEvent("error", "Agent 执行失败，请稍后重试")
+                );
+                cleanupTaskResources(taskId);
+            } catch (Exception publishException) {
+                log.error(
+                        "发布 Agent 失败事件时发生异常，taskId={}",
+                        taskId,
+                        publishException
+                );
+            }
+            return;
+        }
+
+        // 6. 更新成功状态
+        boolean completed = completeTaskSafely(task, result);
+
+        if (!completed) {
+            if (task.getContext().isCancelled()) {
+                cancelTaskSafely(task, "用户取消任务");
+            }
+            return;
+        }
+
+        // 7. 发布完成事件
+        try {
+            publishEvent(
+                    taskId,
+                    new AgentStreamEvent("done", result)
+            );
+
+            // 终态事件持久化成功后清理资源
+            cleanupTaskResources(taskId);
+
+        } catch (Exception e) {
+            log.error(
+                    "发布 Agent 完成事件失败，taskId={}",
+                    taskId,
+                    e
+            );
         }
     }
 
@@ -312,6 +379,89 @@ public class AgentTaskService {
             log.error("更新 Agent 执行失败记录时发生异常，taskId={}", taskId, e);
         }
     }
+
+
+    /**
+     * 安全地完成任务。
+     *
+     * 先更新数据库，再更新内存状态。
+     */
+    private boolean completeTaskSafely(AgentTask task, String result) {
+        String taskId = task.getTaskId();
+
+        synchronized (task) {
+            // 任务已经取消或不处于运行状态，不允许完成
+            if (!"RUNNING".equals(task.getStatus())
+                    || task.getContext().isCancelled()) {
+                return false;
+            }
+
+            try {
+                // 先持久化成功状态
+                agentRunService.markSuccess(taskId, result);
+            } catch (Exception e) {
+                log.error("更新 Agent 成功状态失败，taskId={}", taskId, e);
+                return false;
+            }
+
+            // 数据库更新成功，再更新内存状态
+            if (!task.complete(result)) {
+                log.error(
+                        "数据库已更新成功，但内存任务状态转换失败，taskId={}",
+                        taskId
+                );
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+
+    /**
+     * 安全地处理任务失败。
+     *
+     * 先更新数据库，再更新内存状态。
+     *
+     * @param task          当前任务
+     * @param taskError     内存中保存的错误信息
+     * @param databaseError 数据库中保存的错误信息
+     */
+    private boolean failTaskSafely(
+            AgentTask task,
+            String taskError,
+            String databaseError) {
+
+        String taskId = task.getTaskId();
+
+        synchronized (task) {
+            if (!"RUNNING".equals(task.getStatus())
+                    || task.getContext().isCancelled()) {
+                return false;
+            }
+
+            try {
+                // 先持久化失败状态
+                agentRunService.markFailed(taskId, databaseError);
+            } catch (Exception e) {
+                log.error("更新 Agent 失败状态时发生异常，taskId={}", taskId, e);
+                return false;
+            }
+
+            // 数据库更新成功，再更新内存状态
+            if (!task.fail(taskError)) {
+                log.error(
+                        "数据库已更新失败状态，但内存任务状态转换失败，taskId={}",
+                        taskId
+                );
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+
 
     /**
      * 根据任务 ID 查询内存中的任务
@@ -506,6 +656,15 @@ public class AgentTaskService {
         }
 
         return task;
+    }
+
+    public AgentTaskResponse getTaskResponse(String taskId, Long userId) {
+        AgentRun run = agentRunService.getOwnedRun(taskId, userId);
+        if (run == null) {
+            throw new BizException(ResponseCodeEnum.DATA_NOT_FOUND);
+        }
+
+        return AgentTaskResponse.fromRun(run);
     }
 
     private boolean isTerminalStatus(String status) {

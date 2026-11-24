@@ -1,6 +1,7 @@
 package com.cloud.programmer.runtime.api;
 
 
+import com.cloud.programmer.runtime.entity.AgentRun;
 import com.cloud.programmer.runtime.task.AgentTask;
 
 import java.time.Instant;
@@ -29,6 +30,22 @@ public class AgentTaskResponse {
         response.setCreatedAt(task.getCreatedAt());
         response.setStartedAt(task.getStartedAt());
         response.setFinishedAt(task.getFinishedAt());
+        return response;
+    }
+
+    public static AgentTaskResponse fromRun(AgentRun run) {
+        AgentTaskResponse response = new AgentTaskResponse();
+
+        response.setTaskId(run.getTaskId());
+        response.setInput(run.getInputText());
+        response.setStatus(run.getStatus());
+        response.setResult(run.getResultText());
+        response.setError(run.getErrorMessage());
+
+        response.setCreatedAt(run.getCreateTime().toInstant());
+        response.setStartedAt(run.getStartTime().toInstant());
+        response.setFinishedAt(run.getEndTime().toInstant());
+
         return response;
     }
 

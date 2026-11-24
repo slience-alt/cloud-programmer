@@ -1,9 +1,8 @@
-package com.cloud.programmer.utils;
+package com.cloud.programmer.security;
 
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;

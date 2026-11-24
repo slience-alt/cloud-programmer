@@ -5,17 +5,20 @@ import com.cloud.programmer.enums.McpConnectionStatusEnum;
 import com.cloud.programmer.runtime.client.AdminMcpClient;
 import com.cloud.programmer.runtime.entity.McpServerEntity;
 import com.cloud.programmer.runtime.tool.AgentTool;
+import com.cloud.programmer.security.McpUrlValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpSchema;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -25,6 +28,7 @@ public class McpClientManagerImpl implements McpClientManager {
 
     private final ObjectMapper objectMapper;
     private final AdminMcpClient adminMcpClient;
+    private final Environment environment;
 
     private final ConcurrentMap<Long, McpSyncClient> clients = new ConcurrentHashMap<>();
 
@@ -35,9 +39,10 @@ public class McpClientManagerImpl implements McpClientManager {
 
     private final ConcurrentMap<Long, McpConnectionStatusEnum> statuses = new ConcurrentHashMap<>();
 
-    public McpClientManagerImpl(ObjectMapper objectMapper, AdminMcpClient adminMcpClient) {
+    public McpClientManagerImpl(ObjectMapper objectMapper, AdminMcpClient adminMcpClient, Environment environment) {
         this.objectMapper = objectMapper;
         this.adminMcpClient = adminMcpClient;
+        this.environment = environment;
     }
 
     @Override
@@ -68,6 +73,10 @@ public class McpClientManagerImpl implements McpClientManager {
             if (server.getServerUrl() == null || server.getServerUrl().isBlank()) {
                 throw new IllegalArgumentException("MCP Server URL 不能为空");
             }
+            String trustedHosts = environment.getProperty("security.mcp.trusted-hosts", "");
+            List<String> trustedHostList = trustedHosts.isBlank() ? new ArrayList<>() : Arrays.asList(trustedHosts.split(","));
+
+            McpUrlValidator.validate(server.getServerUrl(), trustedHostList);
             int connectTimeout = server.getConnectTimeoutMs() == null ? 10000 : server.getConnectTimeoutMs();
             int requestTimeout = server.getRequestTimeoutMs() == null ? 30000 : server.getRequestTimeoutMs();
             var transport = HttpClientStreamableHttpTransport

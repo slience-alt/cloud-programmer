@@ -1,16 +1,13 @@
 package com.cloud.programmer.agent.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.cloud.programmer.agent.dto.McpDTO;
 import com.cloud.programmer.agent.entity.McpServerEntity;
 import com.cloud.programmer.agent.mapper.McpServerMapper;
 import com.cloud.programmer.agent.service.McpServerService;
 import com.cloud.programmer.enums.McpTransportTypeEnum;
-import com.cloud.programmer.utils.McpUrlValidator;
+import com.cloud.programmer.security.McpUrlValidator;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -24,8 +21,11 @@ public class McpServerServiceImpl implements McpServerService {
 
     private final McpServerMapper mcpServerMapper;
 
-    public McpServerServiceImpl(McpServerMapper mcpServerMapper) {
+    private final Environment environment;
+
+    public McpServerServiceImpl(McpServerMapper mcpServerMapper, Environment environment) {
         this.mcpServerMapper = mcpServerMapper;
+        this.environment = environment;
     }
 
     @Override
@@ -164,6 +164,14 @@ public class McpServerServiceImpl implements McpServerService {
             mcpDTO.setEnvJson(String.valueOf(mcpServerEntity.getEnvJson()));
         }
         return mcpDTO;
+    }
+
+    private List<String> getTrustedMcpHosts() {
+        String hosts = environment.getProperty("security.mcp.trusted-hosts", String.class);
+        if (!StringUtils.hasText(hosts)) {
+            return new ArrayList<>();
+        }
+        return java.util.Arrays.asList(hosts.split(","));
     }
 
 }

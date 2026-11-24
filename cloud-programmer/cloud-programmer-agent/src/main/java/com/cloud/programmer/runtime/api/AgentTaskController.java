@@ -75,11 +75,8 @@ public class AgentTaskController {
      */
     @GetMapping("/{taskId}")
     public ResponseEntity<AgentTaskResponse> getTask(@PathVariable("taskId") String taskId) {
-        AgentTask task = agentTaskService.getTask(taskId, SecurityUtils.getCurrentUserId());
-        if (task == null) {
-            return ResponseEntity.notFound().build();
-        }
-        return ResponseEntity.ok(AgentTaskResponse.from(task));
+        Long userId = SecurityUtils.getCurrentUserId();
+        return ResponseEntity.ok(agentTaskService.getTaskResponse(taskId, userId));
     }
 
     @PostMapping("/{taskId}/cancel")
